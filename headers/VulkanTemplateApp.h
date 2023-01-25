@@ -8,6 +8,7 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "glm/glm.hpp"
+#include "glm/gtc/matrix_transform.hpp"
 
 //#define NDEBUG //uncomment for release built
 
@@ -20,6 +21,7 @@
 #include <set>
 #include <limits> // Necessary for std::numeric_limits
 #include <algorithm> // Necessary for std::clamp
+#include <chrono> // for timekeeping
 
 
 class VulkanTemplateApp {
@@ -87,14 +89,24 @@ private:
 
 	vk::Pipeline graphicsPipeline;
 	vk::RenderPass renderPass;
+	vk::DescriptorPool descriptorPool;
+	vk::DescriptorSetLayout descriptorSetLayout;
+	std::vector<vk::DescriptorSet> descriptorSet;
 	vk::PipelineLayout pipelineLayout;
 
 	// drawing
 	std::vector<vk::Framebuffer> swapChainFramebuffers;
+
 	vk::Buffer vertexBuffer;
 	vk::Buffer indexBuffer;
+
 	vk::DeviceMemory vertexBufferMemory;	
 	vk::DeviceMemory indexBufferMemory;
+
+	std::vector<vk::Buffer> uniformBuffers;
+	std::vector<vk::DeviceMemory> uniformBuffersMemory;
+	std::vector<void*> uniformBuffersMapped;
+
 	vk::CommandPool commandPool;
 	std::vector<vk::CommandBuffer> commandBuffers;
 	std::vector<vk::Semaphore> imageAvailableSemaphores, renderFinishedSemaphores;
@@ -103,6 +115,12 @@ private:
 	struct Vertex {
 		glm::vec3 pos;
 		glm::vec4 color;
+	};
+
+	struct UniformBufferObj {
+		glm::mat4 model;
+		glm::mat4 view;
+		glm::mat4 proj;
 	};
 	
 	// verticies
@@ -156,6 +174,9 @@ private:
 		void createImageViews();
 
 		void createRenderPass();
+		void createDescriptorSetLayout();
+		void createDescriptorPool();
+		void createDescriptorSet();
 		void createGraphicsPipeline();
 		vk::ShaderModule createShaderModule(const std::vector<char>& code_);
 
@@ -164,10 +185,12 @@ private:
 		void createCommandPool();
 		void createVertexBuffer(); 
 		void createIndexBuffer();
+		void createUniformBuffer();
 		uint32_t findMemoryType(uint32_t typeFilter_, vk::MemoryPropertyFlags properties_);
 		void createCommandBuffer();
 		void recordCommandBuffer(vk::CommandBuffer commandBuffer_, uint32_t imageIndex_);
 		void drawFrame();
+		void updateUniformBuffer(uint32_t currentImage_);
 		void createSyncObjects();
 
 	void mainLoop();

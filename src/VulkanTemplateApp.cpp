@@ -73,11 +73,15 @@ void VulkanTemplateApp::initVulkan() {
 	this->createSwapChain();
 	this->createImageViews();
 	this->createRenderPass();
+	this->createDescriptorSetLayout();
 	this->createGraphicsPipeline();
 	this->createFramebuffers();
 	this->createCommandPool();
 	this->createVertexBuffer();
 	this->createIndexBuffer();
+	this->createUniformBuffer();
+	this->createDescriptorPool();
+	this->createDescriptorSet();
 	this->createCommandBuffer();
 	this->createSyncObjects();
 }
@@ -99,6 +103,12 @@ void VulkanTemplateApp::cleanup() {
 	}
 	this->deviceLogical.destroyPipeline(this->graphicsPipeline);
 	this->deviceLogical.destroyPipelineLayout(this->pipelineLayout);
+	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
+		this->deviceLogical.destroyBuffer(this->uniformBuffers[i]);
+		this->deviceLogical.freeMemory(this->uniformBuffersMemory[i]);
+	}
+	this->deviceLogical.destroyDescriptorPool(this->descriptorPool);
+	this->deviceLogical.destroyDescriptorSetLayout(this->descriptorSetLayout);
 	this->deviceLogical.destroyRenderPass(this->renderPass);
 	for (auto &imageView : this->swapChainImageViews) {
 		deviceLogical.destroyImageView(imageView);
@@ -125,6 +135,7 @@ void VulkanTemplateApp::drawFrame() {
 	// record command buffer
 	uint32_t imageIndex;
 	vk::Result res = this->deviceLogical.acquireNextImageKHR(this->swapChain, UINT64_MAX, this->imageAvailableSemaphores[this->currentFrame], VK_NULL_HANDLE, &imageIndex);
+	this->updateUniformBuffer(this->currentFrame);
 
 	this->commandBuffers[this->currentFrame].reset();
 	this->recordCommandBuffer(this->commandBuffers[this->currentFrame], imageIndex);
@@ -162,7 +173,28 @@ void VulkanTemplateApp::drawFrame() {
 		throw std::underflow_error("\nfailed to present image!\n");
 	}
 
-	++this->currentFrame %= this->MAX_FRAMES_IN_FLIGHT; // advance to next frame
+	++this->currentFrame %= this->MAX_FRAMES_IN_FLIGHT; // advance to the next frame (jumps back to first frame if necessary)
+}
+
+
+void VulkanTemplateApp::updateUniformBuffer(uint32_t currentImage_) {
+	static auto startTime = std::chrono::high_resolution_clock::now();
+
+	auto currentTime = std::chrono::high_resolution_clock::now();
+	float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+	// animation
+	VulkanTemplateApp::UniformBufferObj ubo{};
+
+	ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	ubo.proj = glm::perspective(glm::radians(45.0f), this->swapChainExtent.width / (float)this->swapChainExtent.height, 0.1f, 10.0f);
+
+	ubo.proj[1][1] *= -1; //invert y-coord
+
+	// update uniform buffer data
+	memcpy(this->uniformBuffersMapped[currentImage_], &ubo, sizeof(ubo));
+
 }
 
 										// begin init Vulkan functions
@@ -443,6 +475,26 @@ void VulkanTemplateApp::createRenderPass() {
 	}
 }
 
+void VulkanTemplateApp::createDescriptorSetLayout() {
+	// uniform buffer layout
+	vk::DescriptorSetLayoutBinding uboLayoutBinding;
+	uboLayoutBinding.setBinding(0);
+	uboLayoutBinding.setDescriptorType(vk::DescriptorType::eUniformBuffer);
+	uboLayoutBinding.setDescriptorCount(1);
+	uboLayoutBinding.setStageFlags(vk::ShaderStageFlagBits::eVertex);
+	//uboLayoutBinding.setImmutableSamplers(); // optional
+
+	// descriptor set layout
+	vk::DescriptorSetLayoutCreateInfo layoutInfo;
+	layoutInfo.setBindingCount(1);
+	layoutInfo.setPBindings(&uboLayoutBinding);
+
+	if (this->deviceLogical.createDescriptorSetLayout(&layoutInfo, nullptr, &this->descriptorSetLayout) != vk::Result::eSuccess) {
+		throw std::runtime_error("\nfailed to create descriptor set layout!\n");
+	}
+
+}
+
 void VulkanTemplateApp::createGraphicsPipeline() {
 
 	auto vertShaderCode = readFile("shaders\\vert.spv");
@@ -557,6 +609,8 @@ void VulkanTemplateApp::createGraphicsPipeline() {
 
 	// Pipeline layout
 	vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
+	pipelineLayoutInfo.setSetLayoutCount(1);
+	pipelineLayoutInfo.setPSetLayouts(&this->descriptorSetLayout);
 
 	if (this->deviceLogical.createPipelineLayout(&pipelineLayoutInfo, nullptr, &this->pipelineLayout) != vk::Result::eSuccess) {
 		throw std::runtime_error("\nfailed to create pipeline layout!\n");
@@ -693,6 +747,74 @@ void VulkanTemplateApp::createIndexBuffer() {
 
 	this->deviceLogical.destroyBuffer(stagingBuffer);
 	this->deviceLogical.freeMemory(stagingBufferMemory);
+}
+
+void VulkanTemplateApp::createUniformBuffer() {
+	vk::DeviceSize bufferSize = sizeof(VulkanTemplateApp::UniformBufferObj);
+
+	this->uniformBuffers.resize(this->MAX_FRAMES_IN_FLIGHT);
+	this->uniformBuffersMemory.resize(this->MAX_FRAMES_IN_FLIGHT);
+	this->uniformBuffersMapped.resize(this->MAX_FRAMES_IN_FLIGHT);
+	
+	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
+		this->createBuffer(bufferSize,
+			vk::BufferUsageFlagBits::eUniformBuffer,
+			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+			this->uniformBuffers[i],
+			this->uniformBuffersMemory[i]);
+
+		this->uniformBuffersMapped[i] = this->deviceLogical.mapMemory(this->uniformBuffersMemory[i], 0, bufferSize);
+	}
+}
+
+void VulkanTemplateApp::createDescriptorPool() {
+
+	vk::DescriptorPoolSize poolSize;
+	poolSize.setType(vk::DescriptorType::eUniformBuffer); //descriptor type
+	poolSize.setDescriptorCount(static_cast<uint32_t>(this->MAX_FRAMES_IN_FLIGHT)); //descriptor for every frame
+
+	vk::DescriptorPoolCreateInfo descPoolInfo;
+	descPoolInfo.setMaxSets(static_cast<uint32_t>(this->MAX_FRAMES_IN_FLIGHT));
+	descPoolInfo.setPoolSizeCount(1);
+	descPoolInfo.setPPoolSizes(&poolSize);
+
+	if (this->deviceLogical.createDescriptorPool(&descPoolInfo, nullptr, &this->descriptorPool) != vk::Result::eSuccess) {
+		throw std::runtime_error("\nfailed to create descriptor Pool!\n");
+	}
+}
+
+void VulkanTemplateApp::createDescriptorSet() {
+	std::vector<vk::DescriptorSetLayout> layouts(this->MAX_FRAMES_IN_FLIGHT, this->descriptorSetLayout);
+
+	vk::DescriptorSetAllocateInfo allocInfo;
+	allocInfo.setDescriptorPool(this->descriptorPool);
+	allocInfo.setDescriptorSetCount(static_cast<uint32_t>(this->MAX_FRAMES_IN_FLIGHT));
+	allocInfo.setPSetLayouts(layouts.data());
+
+	this->descriptorSet.resize(this->MAX_FRAMES_IN_FLIGHT);
+	if (this->deviceLogical.allocateDescriptorSets(&allocInfo, this->descriptorSet.data()) != vk::Result::eSuccess) {
+		throw std::runtime_error("\nfailed to allocate descriptor sets!\n");
+	}
+
+	//populate descriptor sets
+	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
+		vk::DescriptorBufferInfo bufferInfo;
+		bufferInfo.setBuffer(this->uniformBuffers[i]);
+		bufferInfo.setOffset(0);
+		bufferInfo.setRange(sizeof(VulkanTemplateApp::UniformBufferObj));
+
+		vk::WriteDescriptorSet descriptorWrite;
+		descriptorWrite.setDstSet(this->descriptorSet[i]);
+		descriptorWrite.setDstBinding(0);
+		descriptorWrite.setDstArrayElement(0);
+		descriptorWrite.setDescriptorType(vk::DescriptorType::eUniformBuffer);
+		descriptorWrite.setDescriptorCount(1); //how many array element to update
+		descriptorWrite.setPBufferInfo(&bufferInfo);
+		descriptorWrite.setPImageInfo(nullptr); //optional
+		descriptorWrite.setPTexelBufferView(nullptr); //optional
+
+		this->deviceLogical.updateDescriptorSets(1, &descriptorWrite, 0, nullptr);
+	}
 }
 
 void VulkanTemplateApp::createCommandBuffer() {
@@ -953,7 +1075,7 @@ void VulkanTemplateApp::recordCommandBuffer(vk::CommandBuffer commandBuffer_, ui
 
 	// starting a render pass
 	vk::ClearColorValue clearColor;
-	clearColor.setFloat32({ 0.05f, 0.05f, 0.05f, 1.0f });
+	clearColor.setFloat32({ 0.01f, 0.01f, 0.01f, 1.0f });
 	vk::ClearDepthStencilValue depthStencil;
 	depthStencil.setStencil(1);
 	vk::ClearValue clearValue(clearColor);
@@ -993,6 +1115,14 @@ void VulkanTemplateApp::recordCommandBuffer(vk::CommandBuffer commandBuffer_, ui
 
 	commandBuffer_.setViewport(0, 1, &viewport);
 	commandBuffer_.setScissor(0, 1, &scissor);
+
+	//using descriptor sets
+	commandBuffer_.bindDescriptorSets(
+		vk::PipelineBindPoint::eGraphics, 
+		this->pipelineLayout, 
+		0, 1, 
+		&this->descriptorSet[this->currentFrame], 
+		0, nullptr);
 
 	// actually draw command
 	//commandBuffer_.draw(3, 1, 0, 0);
