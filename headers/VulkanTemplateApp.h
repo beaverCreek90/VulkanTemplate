@@ -30,6 +30,11 @@ public:
 	const char* pAppName = "Vulkan Template App";
 	const int MAX_FRAMES_IN_FLIGHT = 2;
 	uint32_t currentFrame = 0;
+	bool framebufferResized = false;
+
+	//Time
+	float deltaTime = 1.0f;
+	std::chrono::steady_clock::time_point globalTime = std::chrono::high_resolution_clock::now();
 
 
 	VulkanTemplateApp();
@@ -197,6 +202,9 @@ private:
 
 	void cleanup();
 
+	// recreation of swap chain
+	void cleanSwapChain();
+	void recreateSwapChain();
 
 	// helper fnc
 	void createBuffer(vk::DeviceSize size_, vk::BufferUsageFlags usage_, vk::MemoryPropertyFlags properties_, vk::Buffer& buffer_, vk::DeviceMemory& bufferMemory_);

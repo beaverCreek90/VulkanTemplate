@@ -20,6 +20,11 @@ static std::vector<char> readFile(const std::string& filename_) {
 
 	return buffer;
 }
+
+void framebufferResizeCallback(GLFWwindow* window_, int width_, int height_) {
+	auto app = reinterpret_cast<VulkanTemplateApp*>(glfwGetWindowUserPointer(window_));
+	app->framebufferResized = true;
+}
 // member functions
 
 VulkanTemplateApp::VulkanTemplateApp() {
@@ -44,13 +49,16 @@ void VulkanTemplateApp::initWindow() {
 	// for NOT using openGL:
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	//set resizeable window
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
 	this->window = glfwCreateWindow(this->WIDTH, this->HEIGHT, this->pAppName, nullptr, nullptr);
 
 	if (this->window == nullptr) {
 		throw std::runtime_error("\n\nfailed to create window\n");
 	}
+
+	glfwSetWindowUserPointer(this->window, this);
+	glfwSetFramebufferSizeCallback(this->window, framebufferResizeCallback);
 }
 
 void VulkanTemplateApp::mainLoop() {
@@ -87,6 +95,7 @@ void VulkanTemplateApp::initVulkan() {
 }
 
 void VulkanTemplateApp::cleanup() {
+	this->cleanSwapChain();
 	// cleans aquired rescources in revers order as the were created
 	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
 		this->deviceLogical.destroySemaphore(this->imageAvailableSemaphores[i]);
@@ -98,9 +107,6 @@ void VulkanTemplateApp::cleanup() {
 	this->deviceLogical.freeMemory(this->vertexBufferMemory);
 	this->deviceLogical.freeMemory(this->indexBufferMemory);
 	this->deviceLogical.destroyCommandPool(this->commandPool);
-	for (auto &framebuffer : this->swapChainFramebuffers) {
-		this->deviceLogical.destroyFramebuffer(framebuffer);
-	}
 	this->deviceLogical.destroyPipeline(this->graphicsPipeline);
 	this->deviceLogical.destroyPipelineLayout(this->pipelineLayout);
 	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
@@ -110,10 +116,6 @@ void VulkanTemplateApp::cleanup() {
 	this->deviceLogical.destroyDescriptorPool(this->descriptorPool);
 	this->deviceLogical.destroyDescriptorSetLayout(this->descriptorSetLayout);
 	this->deviceLogical.destroyRenderPass(this->renderPass);
-	for (auto &imageView : this->swapChainImageViews) {
-		deviceLogical.destroyImageView(imageView);
-	}
-	this->deviceLogical.destroySwapchainKHR(this->swapChain);
 	this->deviceLogical.destroy();
 	this->vulkanInstance.destroySurfaceKHR(this->surface);
 	this->vulkanInstance.destroyDebugUtilsMessengerEXT(this->debugMessenger, nullptr, this->dldi);
@@ -126,15 +128,25 @@ void VulkanTemplateApp::cleanup() {
 
 void VulkanTemplateApp::drawFrame() {
 	// draws scene
-	
-	if (this->deviceLogical.waitForFences(1, &this->inFlightFences[this->currentFrame], VK_TRUE, UINT64_MAX) == vk::Result::eSuccess) {
-		// wait for previous frame to finish
-		this->deviceLogical.resetFences(this->inFlightFences[this->currentFrame]);
-	}
+	vk::Result res = this->deviceLogical.waitForFences(1, &this->inFlightFences[this->currentFrame], VK_TRUE, UINT64_MAX);
+		
 
 	// record command buffer
 	uint32_t imageIndex;
-	vk::Result res = this->deviceLogical.acquireNextImageKHR(this->swapChain, UINT64_MAX, this->imageAvailableSemaphores[this->currentFrame], VK_NULL_HANDLE, &imageIndex);
+	res = this->deviceLogical.acquireNextImageKHR(this->swapChain, UINT64_MAX, this->imageAvailableSemaphores[this->currentFrame], VK_NULL_HANDLE, &imageIndex);
+	
+	if (res == vk::Result::eErrorOutOfDateKHR || this->framebufferResized) {
+		this->framebufferResized = false;
+		this->recreateSwapChain();
+		return; // return from draw frame function!
+	}
+	else if (res != vk::Result::eSuccess && res != vk::Result::eSuboptimalKHR) {
+		throw std::runtime_error("\nfailed to aquire swap chain image!\n");
+	}
+
+	// reset fence only if we are actually submitting to an image
+	this->deviceLogical.resetFences(this->inFlightFences[this->currentFrame]);
+	
 	this->updateUniformBuffer(this->currentFrame);
 
 	this->commandBuffers[this->currentFrame].reset();
@@ -168,25 +180,36 @@ void VulkanTemplateApp::drawFrame() {
 	presentInfo.setSwapchains(swapChains);
 	presentInfo.setImageIndices(imageIndex);
 	
+	res = this->presentQueue.presentKHR(presentInfo);
 
-	if (this->presentQueue.presentKHR(presentInfo) != vk::Result::eSuccess) {
-		throw std::underflow_error("\nfailed to present image!\n");
+	if (res == vk::Result::eErrorOutOfDateKHR || res != vk::Result::eSuboptimalKHR || this->framebufferResized) {
+		this->framebufferResized = false;
+		this->recreateSwapChain();
+	}
+	else if (res != vk::Result::eSuccess) {
+		throw std::runtime_error("\nfailed to present swap chain image!\n");
 	}
 
 	++this->currentFrame %= this->MAX_FRAMES_IN_FLIGHT; // advance to the next frame (jumps back to first frame if necessary)
 }
 
-
 void VulkanTemplateApp::updateUniformBuffer(uint32_t currentImage_) {
 	static auto startTime = std::chrono::high_resolution_clock::now();
 
 	auto currentTime = std::chrono::high_resolution_clock::now();
-	float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+	this->deltaTime = std::chrono::duration<float, std::chrono::milliseconds::period>(currentTime - this->globalTime).count();
+	this->globalTime = currentTime;
 
+	float time_ms = std::chrono::duration<float, std::chrono::milliseconds::period>(currentTime - startTime).count();
+	float time_s = time_ms / 1000;
+
+	
+
+	std::cout << time_s << "\t" << 1/this->deltaTime*1000 << "\n";
 	// animation
 	VulkanTemplateApp::UniformBufferObj ubo{};
 
-	ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	ubo.model = glm::rotate(glm::mat4(1.0f), time_s * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 	ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 	ubo.proj = glm::perspective(glm::radians(45.0f), this->swapChainExtent.width / (float)this->swapChainExtent.height, 0.1f, 10.0f);
 
@@ -680,7 +703,7 @@ void VulkanTemplateApp::createCommandPool() {
 
 void VulkanTemplateApp::createVertexBuffer() {
 
-	vk::DeviceSize bufferSize = sizeof(Vertex) * this->vertices.size();
+	vk::DeviceSize bufferSize = sizeof(VulkanTemplateApp::Vertex) * this->vertices.size();
 
 	// using staging buffer and transfer data to gpu local memory
 	vk::Buffer stagingBuffer;
@@ -1169,6 +1192,39 @@ void VulkanTemplateApp::createSyncObjects() {
 
 //helper func
 
+
+void VulkanTemplateApp::cleanSwapChain() {
+
+	for (auto& framebuffer : this->swapChainFramebuffers) {
+		this->deviceLogical.destroyFramebuffer(framebuffer);
+	}
+
+	for (auto& imageView : this->swapChainImageViews) {
+		deviceLogical.destroyImageView(imageView);
+	}
+
+	this->deviceLogical.destroySwapchainKHR(this->swapChain);
+}
+
+void VulkanTemplateApp::recreateSwapChain() {
+	this->deviceLogical.waitIdle();
+	int width = 0, height = 0;
+	glfwGetFramebufferSize(this->window, &width, &height);
+
+	while (width == 0 || height == 0)
+	{
+		glfwGetFramebufferSize(this->window, &width, &height);
+		glfwWaitEvents();
+	}
+
+	this->deviceLogical.waitIdle();
+
+	this->cleanSwapChain();
+
+	this->createSwapChain();
+	this->createImageViews();
+	this->createFramebuffers();
+}
 
 void VulkanTemplateApp::createBuffer(vk::DeviceSize size_, vk::BufferUsageFlags usage_, vk::MemoryPropertyFlags properties_, vk::Buffer& buffer_, vk::DeviceMemory& bufferMemory_) {
 	vk::BufferCreateInfo bufferInfo;
