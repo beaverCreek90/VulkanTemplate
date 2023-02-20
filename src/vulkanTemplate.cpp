@@ -11,10 +11,11 @@ int main()
     try {
         myApp.run();
     }
-    catch (vk::SystemError ex) {
+    catch (std::exception ex) {
         std::cout << ex.what() << std::endl;
     }
 
+    //system("pause");
     std::cout << "\n*************************************\n\tEnd of program\n*************************************\n";
     return EXIT_SUCCESS;
 }

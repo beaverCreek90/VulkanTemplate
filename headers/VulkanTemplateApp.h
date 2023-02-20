@@ -3,7 +3,10 @@
 #define VULKANTEMPLATEAPP_H
 
 #include "vulkan/vulkan.hpp"
-#include "GLFW/glfw3.h"
+//#include "GLFW/glfw3.h"
+#define SDL_MAIN_HANDLED
+#include "SDL2/SDL.h"
+#include "SDL2/SDL_vulkan.h"
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -45,7 +48,7 @@ public:
 	void run();
 
 private:
-	GLFWwindow* window = nullptr;
+	SDL_Window* window = nullptr;
 	vk::SurfaceKHR surface;
 
 	vk::Instance vulkanInstance;	
@@ -139,7 +142,7 @@ private:
 	// indices
 	const std::array<uint16_t, 9> indices{
 		0, 1, 2,	//triangle 1
-		//0, 2, 3,	//triangle 2
+		0, 2, 3,	//triangle 2
 		0, 3, 4		//triangle 3
 	};
 
@@ -198,6 +201,7 @@ private:
 		void updateUniformBuffer(uint32_t currentImage_);
 		void createSyncObjects();
 
+	void setupMainLoop();
 	void mainLoop();
 
 	void cleanup();

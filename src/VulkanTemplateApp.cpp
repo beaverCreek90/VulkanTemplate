@@ -5,6 +5,7 @@ static std::vector<char> readFile(const std::string& filename_) {
 	std::ifstream file(filename_, std::ios::ate | std::ios::binary);
 
 	if (!file.is_open()) {
+		std::cout << filename_ << "\n";
 		throw std::runtime_error("\nfailed to open file!\n");
 	}
 
@@ -20,11 +21,11 @@ static std::vector<char> readFile(const std::string& filename_) {
 
 	return buffer;
 }
-
+/*
 void framebufferResizeCallback(GLFWwindow* window_, int width_, int height_) {
 	auto app = reinterpret_cast<VulkanTemplateApp*>(glfwGetWindowUserPointer(window_));
 	app->framebufferResized = true;
-}
+}*/
 // member functions
 
 VulkanTemplateApp::VulkanTemplateApp() {
@@ -38,34 +39,45 @@ VulkanTemplateApp::~VulkanTemplateApp() {
 void VulkanTemplateApp::run() {
 	this->initWindow();
 	this->initVulkan();
+	this->setupMainLoop();
 	this->mainLoop();
 	this->cleanup();
 }
 
 void VulkanTemplateApp::initWindow() {
-	// initilizes window interface with GLFW
-	glfwInit();
+	// initilizes window interface with SDL2
+	//SDL_SetMainReady();
+	if (SDL_Init(SDL_INIT_VIDEO)) {
+		const char* sdl_error = SDL_GetError();
+		std::cout << sdl_error << "\n";
+		throw std::runtime_error("\nfailed to init SDL!\n");
+	}
 
-	// for NOT using openGL:
-	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	//set resizeable window
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-
-	this->window = glfwCreateWindow(this->WIDTH, this->HEIGHT, this->pAppName, nullptr, nullptr);
+	this->window = SDL_CreateWindow(this->pAppName, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, this->WIDTH, this->HEIGHT, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 
 	if (this->window == nullptr) {
 		throw std::runtime_error("\n\nfailed to create window\n");
 	}
 
-	glfwSetWindowUserPointer(this->window, this);
-	glfwSetFramebufferSizeCallback(this->window, framebufferResizeCallback);
+}
+
+void VulkanTemplateApp::setupMainLoop() {
+
+	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
+		//this->commandBuffers[i].reset();
+		//this->recordCommandBuffer(this->commandBuffers[i], (uint32_t)i);
+	}
 }
 
 void VulkanTemplateApp::mainLoop() {
 	// runs app as long window isn't closed
-	while (!glfwWindowShouldClose(this->window)) 
+
+	SDL_Event event;
+	event.window.event = SDL_WINDOWEVENT_NONE;
+	while (event.window.event != SDL_WINDOWEVENT_CLOSE)
 	{
-		glfwPollEvents();
+		
+		SDL_PollEvent(&event);
 		this->drawFrame();
 	}
 	
@@ -92,9 +104,11 @@ void VulkanTemplateApp::initVulkan() {
 	this->createDescriptorSet();
 	this->createCommandBuffer();
 	this->createSyncObjects();
+/*	*/
 }
 
 void VulkanTemplateApp::cleanup() {
+	/**/
 	this->cleanSwapChain();
 	// cleans aquired rescources in revers order as the were created
 	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
@@ -118,19 +132,21 @@ void VulkanTemplateApp::cleanup() {
 	this->deviceLogical.destroyRenderPass(this->renderPass);
 	this->deviceLogical.destroy();
 	this->vulkanInstance.destroySurfaceKHR(this->surface);
+#ifndef NDEBUG
 	this->vulkanInstance.destroyDebugUtilsMessengerEXT(this->debugMessenger, nullptr, this->dldi);
+#endif // DEBUG
 	this->vulkanInstance.destroy();
+	// SDL window:
+	SDL_DestroyWindow(this->window);
+	SDL_Quit();
 
-	// GLFW window:
-	glfwDestroyWindow(this->window);
-	glfwTerminate();
 }
 
 void VulkanTemplateApp::drawFrame() {
 	// draws scene
+
 	vk::Result res = this->deviceLogical.waitForFences(1, &this->inFlightFences[this->currentFrame], VK_TRUE, UINT64_MAX);
 		
-
 	// record command buffer
 	uint32_t imageIndex;
 	res = this->deviceLogical.acquireNextImageKHR(this->swapChain, UINT64_MAX, this->imageAvailableSemaphores[this->currentFrame], VK_NULL_HANDLE, &imageIndex);
@@ -148,7 +164,6 @@ void VulkanTemplateApp::drawFrame() {
 	this->deviceLogical.resetFences(this->inFlightFences[this->currentFrame]);
 	
 	this->updateUniformBuffer(this->currentFrame);
-
 	this->commandBuffers[this->currentFrame].reset();
 	this->recordCommandBuffer(this->commandBuffers[this->currentFrame], imageIndex);
 
@@ -182,7 +197,7 @@ void VulkanTemplateApp::drawFrame() {
 	
 	res = this->presentQueue.presentKHR(presentInfo);
 
-	if (res == vk::Result::eErrorOutOfDateKHR || res != vk::Result::eSuboptimalKHR || this->framebufferResized) {
+	if (res == vk::Result::eErrorOutOfDateKHR || res == vk::Result::eSuboptimalKHR || this->framebufferResized) {
 		this->framebufferResized = false;
 		this->recreateSwapChain();
 	}
@@ -205,7 +220,7 @@ void VulkanTemplateApp::updateUniformBuffer(uint32_t currentImage_) {
 
 	
 
-	std::cout << time_s << "\t" << 1/this->deltaTime*1000 << "\n";
+	//std::cout << time_s << "\t" << 1/this->deltaTime*1000 << "\n";
 	// animation
 	VulkanTemplateApp::UniformBufferObj ubo{};
 
@@ -234,12 +249,16 @@ void VulkanTemplateApp::createInstance() {
 	appInfo.setEngineVersion(VK_API_VERSION_1_0);
 	appInfo.setApiVersion(VK_API_VERSION_1_0);
 
-	//extensions for window interface GLFW
-	uint32_t glfwExtensionsCount = 0;
-	const char** ppGlfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionsCount);
+	//extensions for window interface SDL
+	uint32_t SDL_ExtensionsCount = 0;
+	//get extensions count
+	if (SDL_Vulkan_GetInstanceExtensions(this->window, &SDL_ExtensionsCount, nullptr) == SDL_FALSE) {
+		throw std::runtime_error("\nfailed to query SDL-Vulkan extenstions!\n");
+	}
+	std::vector<const char*> requiredExtensions(SDL_ExtensionsCount);
+	//actually get extensions name
+	SDL_Vulkan_GetInstanceExtensions(this->window, &SDL_ExtensionsCount, requiredExtensions.data());
 
-	// create extensions vector
-	std::vector<const char*> requiredExtensions(ppGlfwExtensions, ppGlfwExtensions + glfwExtensionsCount);
 	if (this->enableValidationLayers) {
 		// add extension for debug utils messenger
 		requiredExtensions.push_back( VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -295,8 +314,10 @@ void VulkanTemplateApp::setupDebugMessenger() {
 
 void VulkanTemplateApp::createSurface() {
 
-	VkSurfaceKHR cStyleSurface; // for using C-style glfw function
-	if (glfwCreateWindowSurface(this->vulkanInstance, this->window, nullptr, &cStyleSurface) != VK_SUCCESS) {
+	VkSurfaceKHR cStyleSurface; // for using C-style sdl function
+	if (SDL_Vulkan_CreateSurface(this->window, this->vulkanInstance, &cStyleSurface) == SDL_FALSE) {
+		const char* sdl_error = SDL_GetError();
+		std::cout << sdl_error << "\n";
 		throw std::runtime_error("\nfailed to create window surface!");
 	}
 
@@ -629,6 +650,8 @@ void VulkanTemplateApp::createGraphicsPipeline() {
 	colorBlendStateInfo.setLogicOpEnable(VK_FALSE);
 	colorBlendStateInfo.setAttachmentCount(1);
 	colorBlendStateInfo.setAttachments(colorBlendAttachment);
+	std::array<float, 4> blendConst = { 0.5f, 0.5f, 0.5f, 0.5f };
+	colorBlendStateInfo.setBlendConstants(blendConst);
 
 	// Pipeline layout
 	vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
@@ -847,12 +870,39 @@ void VulkanTemplateApp::createCommandBuffer() {
 	vk::CommandBufferAllocateInfo allocInfo;
 	allocInfo.setCommandPool(this->commandPool);
 	allocInfo.setLevel(vk::CommandBufferLevel::ePrimary);
-	allocInfo.setCommandBufferCount((uint32_t) commandBuffers.size());
+	allocInfo.setCommandBufferCount((uint32_t) this->commandBuffers.size());
 
 	if(this->deviceLogical.allocateCommandBuffers(&allocInfo, this->commandBuffers.data()) != vk::Result::eSuccess) {
 		throw std::runtime_error("\nfailed to create command buffer!\n");
 	}
 }
+
+void VulkanTemplateApp::createSyncObjects() {
+	// creates needed fences and semaphores for every frame in flight allowed
+
+	this->imageAvailableSemaphores.resize(this->MAX_FRAMES_IN_FLIGHT);
+	this->renderFinishedSemaphores.resize(this->MAX_FRAMES_IN_FLIGHT);
+	this->inFlightFences.resize(this->MAX_FRAMES_IN_FLIGHT);
+
+	vk::SemaphoreCreateInfo semaphoreInfo; // no fields needed
+	vk::FenceCreateInfo fenceInfo;
+	fenceInfo.setFlags(vk::FenceCreateFlagBits::eSignaled);
+
+	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
+
+		if (this->deviceLogical.createSemaphore(&semaphoreInfo, nullptr, &this->imageAvailableSemaphores[i]) != vk::Result::eSuccess ||
+			this->deviceLogical.createSemaphore(&semaphoreInfo, nullptr, &this->renderFinishedSemaphores[i]) != vk::Result::eSuccess ||
+			this->deviceLogical.createFence(&fenceInfo, nullptr, &this->inFlightFences[i]) != vk::Result::eSuccess)
+		{
+			throw std::runtime_error("\nfailed to create semaphore and/or fences for a frame!\n");
+		}
+	}
+
+}
+
+// --------------------------------end init Vulkan funktions
+
+//helper func
 
 bool VulkanTemplateApp::checkInstanceExtentionsSupport(const std::vector<const char*>& requiredExtensions_) {
 	// vulkan supported extensions
@@ -1047,7 +1097,7 @@ vk::Extent2D VulkanTemplateApp::chooseSwapExtent(const vk::SurfaceCapabilitiesKH
 	else
 	{
 		int width, height;
-		glfwGetFramebufferSize(this->window, &width, &height);
+		SDL_Vulkan_GetDrawableSize(this->window, &width, &height);
 
 		vk::Extent2D actualExtent(
 			static_cast<uint32_t>(width), 
@@ -1091,6 +1141,7 @@ uint32_t VulkanTemplateApp::findMemoryType(uint32_t typeFilter_, vk::MemoryPrope
 void VulkanTemplateApp::recordCommandBuffer(vk::CommandBuffer commandBuffer_, uint32_t imageIndex_) {
 
 	vk::CommandBufferBeginInfo beginInfo;
+	//beginInfo.set
 
 	if(commandBuffer_.begin(&beginInfo) != vk::Result::eSuccess) {
 		throw std::runtime_error("\nfailed to record command buffer!\n");
@@ -1165,33 +1216,6 @@ void VulkanTemplateApp::recordCommandBuffer(vk::CommandBuffer commandBuffer_, ui
 	}
 }
 
-void VulkanTemplateApp::createSyncObjects() {
-	// creates needed fences and semaphores for every frame in flight allowed
-
-	this->imageAvailableSemaphores.resize(this->MAX_FRAMES_IN_FLIGHT);
-	this->renderFinishedSemaphores.resize(this->MAX_FRAMES_IN_FLIGHT);
-	this->inFlightFences.resize(this->MAX_FRAMES_IN_FLIGHT);
-
-	vk::SemaphoreCreateInfo semaphoreInfo; // no fields needed
-	vk::FenceCreateInfo fenceInfo; 
-	fenceInfo.setFlags(vk::FenceCreateFlagBits::eSignaled);
-
-	for (size_t i = 0; i < this->MAX_FRAMES_IN_FLIGHT; i++) {
-
-		if (this->deviceLogical.createSemaphore(&semaphoreInfo, nullptr, &this->imageAvailableSemaphores[i]) != vk::Result::eSuccess ||
-			this->deviceLogical.createSemaphore(&semaphoreInfo, nullptr, &this->renderFinishedSemaphores[i]) != vk::Result::eSuccess ||
-			this->deviceLogical.createFence(&fenceInfo, nullptr, &this->inFlightFences[i]) != vk::Result::eSuccess)
-		{
-			throw std::runtime_error("\nfailed to create semaphore and/or fences for a frame!\n");
-		}
-	}
-	
-}
-
-// --------------------------------end init Vulkan funktions
-
-//helper func
-
 
 void VulkanTemplateApp::cleanSwapChain() {
 
@@ -1209,12 +1233,12 @@ void VulkanTemplateApp::cleanSwapChain() {
 void VulkanTemplateApp::recreateSwapChain() {
 	this->deviceLogical.waitIdle();
 	int width = 0, height = 0;
-	glfwGetFramebufferSize(this->window, &width, &height);
-
+	SDL_Vulkan_GetDrawableSize(this->window, &width, &height);
+	SDL_Event event;
 	while (width == 0 || height == 0)
 	{
-		glfwGetFramebufferSize(this->window, &width, &height);
-		glfwWaitEvents();
+		SDL_WaitEvent(&event);
+		SDL_Vulkan_GetDrawableSize(this->window, &width, &height);
 	}
 
 	this->deviceLogical.waitIdle();
@@ -1224,6 +1248,7 @@ void VulkanTemplateApp::recreateSwapChain() {
 	this->createSwapChain();
 	this->createImageViews();
 	this->createFramebuffers();
+	//this->setupMainLoop();
 }
 
 void VulkanTemplateApp::createBuffer(vk::DeviceSize size_, vk::BufferUsageFlags usage_, vk::MemoryPropertyFlags properties_, vk::Buffer& buffer_, vk::DeviceMemory& bufferMemory_) {
